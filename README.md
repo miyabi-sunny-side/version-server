@@ -78,7 +78,13 @@ curl -sS -X POST localhost:3000/webhook/github -H "X-Hub-Signature-256: $sig" -H
 
 ## GitHub template and releases
 
-rust-svelte-template から起こした。`Dockerfile` と `.github/workflows` は template のまま: CI が `sha-<short>` の image を push し、tag の Release container workflow が `<version>` / `latest` に retag して GitHub Release を作る。release の手順は template の README に従う。
+rust-svelte-template から起こした。main・PR・手動 CI は frontend / Rust の検査と debug server の smoke を行う。PR・手動 CI は公開せず container build も検査する。
+
+`Cargo.toml` と `Cargo.lock` の package version を更新して commit し、同じ commit に `v<major>.<minor>.<patch>` tag を付けて push すると Release container が動く。手動 release も同じ tag ref を選ぶ。tag commit の検査に成功し、tag と両 manifest の version が一致した場合だけ、そのソースから image を build / publish する。公開先は `ghcr.io/miyabi-sunny-side/version-server:<version>` と `:latest`。GitHub Release には、build 出力と一致を検証した `<version>@sha256:...` を記載する。
+
+Docker は Rust 1.96.0 と cargo-chef 0.1.78 を固定し、frontend・Rust 依存・本体を別の層として構築する。tag 間の中間層は製品 image と別の `:build-cache` に registry cache (`mode=max`) として保存する。本体は実際の manifest で build するため、version だけの更新でも本体を再コンパイルする。
+
+release profile は `opt-level=3` / `lto=false` / `codegen-units=16` / `strip=true`。軽微なサイズ・メモリ増を許容して build 待ち時間を減らす方針。
 
 ## License
 

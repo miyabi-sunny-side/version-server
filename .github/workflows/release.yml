@@ -3,25 +3,44 @@ name: Release container
 on:
   # Manual runs must select a v-prefixed tag ref.
   workflow_dispatch:
-  # To enable automatic releases, uncomment the next two lines.
-  # push:
-  #   tags: ['v*.*.*']
+  push:
+    tags: ['v*.*.*']
 
 permissions:
   contents: read
 
 jobs:
+  verify:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: verify
     if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
-      # `contents: write` is what `gh release create` needs; the image push
-      # still only needs `packages: write`.
       contents: write
       packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Verify tag and locked package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          with open("Cargo.toml", "rb") as f:
+              package = tomllib.load(f)["package"]
+          with open("Cargo.lock", "rb") as f:
+              locked = tomllib.load(f)["package"]
+          version = package["version"]
+          assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version), version
+          assert os.environ["RELEASE_TAG"] == "v" + version, "tag/package mismatch"
+          local = [p for p in locked if p["name"] == package["name"] and "source" not in p]
+          assert len(local) == 1 and local[0]["version"] == version, "lock/package mismatch"
+          PY
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -42,55 +61,34 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest
 
-      - name: Resolve tagged commit's short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Check for a CI-built image at this commit
-        id: source
-        run: |
-          if docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:sha-${{ steps.sha.outputs.short }}" >/dev/null 2>&1; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Retag the CI-built image
-        if: steps.source.outputs.found == 'true'
-        run: |
-          set -euo pipefail
-          args=()
-          while IFS= read -r tag; do
-            [ -n "$tag" ] && args+=(-t "$tag")
-          done <<< "${{ steps.meta.outputs.tags }}"
-          docker buildx imagetools create "${args[@]}" \
-            "ghcr.io/${{ github.repository }}:sha-${{ steps.sha.outputs.short }}"
-
-      - name: Build and publish image
-        if: steps.source.outputs.found == 'false'
+      - name: Build and publish image from tagged source
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:build-cache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:build-cache,mode=max
 
-      # The GitHub Release is part of the release, not an extra: every product
-      # cut from this template publishes one for every tag, so a listener can
-      # act on the release notification. A tag that already has a Release
-      # (a re-run of this workflow) is left as it is rather than failed.
-      - name: Resolve the published image digest
+      - name: Verify published image digest
         id: digest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          digest=$(docker buildx imagetools inspect \
-            "ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}" \
-            --format '{{ json .Manifest.Digest }}' | tr -d '"')
-          echo "image=ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME}@${digest}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          ref="$IMAGE:${GITHUB_REF_NAME#v}"
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{ json .Manifest.Digest }}' | tr -d '"')
+          test -n "$BUILD_DIGEST"
+          test "$digest" = "$BUILD_DIGEST"
+          echo "image=$ref@$digest" >> "$GITHUB_OUTPUT"
 
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_IMAGE: ${{ steps.digest.outputs.image }}
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
@@ -100,4 +98,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
             --generate-notes \
-            --notes "Image: \`${{ steps.digest.outputs.image }}\`"
+            --notes "Image: \`$RELEASE_IMAGE\`"
