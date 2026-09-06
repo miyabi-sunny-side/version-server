@@ -25,13 +25,16 @@
 
 | 変数 | 既定 | 用途 |
 |---|---|---|
-| `APP_BIND_ADDR` | `127.0.0.1:3000` | listen address (container では `0.0.0.0:3000`) |
+| `PORT` | `3000` | 待受ポート (1–65535)。全 IPv4 interface (`0.0.0.0`) で待ち受ける |
 | `VERSION_SERVER_DB` | `data/version-server.db` | SQLite の path。親 directory は作る |
 | `GITHUB_WEBHOOK_SECRET` | (無し) | webhook の HMAC secret。無ければ webhook は全部 401 |
 | `WATCH_REPOS` | (無し) | polling する `org/repo` の comma 区切り。空なら polling しない |
 | `GITHUB_TOKEN` | (無し) | polling の bearer。無くても public repo は読めるが rate limit が低い |
 | `POLL_SECS` | `60` | polling の間隔 |
 | `GITHUB_API_URL` | `https://api.github.com` | テストや GHES 向けの差し替え口 |
+
+`PORT` は未指定時だけ既定値を使い、空・非数値・範囲外なら明示エラーで起動に失敗する。
+`PORT=3010 cargo run` で待受ポートを変更できる。公開範囲は Compose / ingress 側で管理する。
 
 秘密は env だけで受け取り、log には有無しか出さない。
 
@@ -42,7 +45,7 @@ services:
   version-server:
     image: ghcr.io/miyabi-sunny-side/version-server:latest
     environment:
-      - APP_BIND_ADDR=0.0.0.0:3000
+      - PORT=3000
       - VERSION_SERVER_DB=/app/data/version-server.db
       - GITHUB_WEBHOOK_SECRET=${VERSION_SERVER_WEBHOOK_SECRET}
       - GITHUB_TOKEN=${VERSION_SERVER_GITHUB_TOKEN}

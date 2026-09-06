@@ -30,7 +30,7 @@ WORKDIR /app
 RUN mkdir data && chown 10001:10001 data
 COPY --from=backend /app/target/release/version-server /usr/local/bin/version-server
 COPY --from=frontend /app/client/dist ./client/dist
-ENV APP_BIND_ADDR=0.0.0.0:3000
+ENV PORT=3000
 EXPOSE 3000
 USER 10001:10001
 ENTRYPOINT ["version-server"]

@@ -5,7 +5,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use version_server::{AppState, Store, github};
 
-const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
+const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_DB_PATH: &str = "data/version-server.db";
 const DEFAULT_POLL_SECS: u64 = 60;
 const GITHUB_API: &str = "https://api.github.com";
@@ -67,10 +67,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn bind_addr_from_env() -> Result<SocketAddr, Box<dyn Error>> {
-    env::var("APP_BIND_ADDR")
-        .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_owned())
-        .parse()
-        .map_err(Into::into)
+    let raw = match env::var("PORT") {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err("PORT must be a valid Unicode integer".into());
+        }
+    };
+    Ok(SocketAddr::from((
+        [0, 0, 0, 0],
+        parse_port(raw.as_deref())?,
+    )))
+}
+
+fn parse_port(raw: Option<&str>) -> Result<u16, Box<dyn Error>> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_PORT);
+    };
+    raw.parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0 && raw.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| "PORT must be an integer from 1 to 65535".into())
 }
 
 /// `WATCH_REPOS`: `org/repo` names separated by commas, blanks ignored.
@@ -108,4 +125,35 @@ async fn shutdown_signal() {
     }
 
     info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_port;
+
+    #[test]
+    fn port_defaults_only_when_unset() {
+        assert_eq!(parse_port(None).unwrap(), 3000);
+        for (raw, expected) in [("1", 1), ("43127", 43127), ("65535", 65535)] {
+            assert_eq!(parse_port(Some(raw)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_port_is_an_explicit_error() {
+        for raw in [
+            "",
+            "0",
+            "65536",
+            "-1",
+            "+3000",
+            "3000 ",
+            " 3000",
+            "abc",
+            "127.0.0.1:3000",
+        ] {
+            let error = parse_port(Some(raw)).unwrap_err();
+            assert!(error.to_string().contains("PORT"), "{raw:?}: {error}");
+        }
+    }
 }

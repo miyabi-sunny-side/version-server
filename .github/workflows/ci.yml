@@ -67,13 +67,14 @@ jobs:
         run: |
           set -euo pipefail
           smoke_dir=$(mktemp -d)
+          export PORT=43127
           export VERSION_SERVER_DB="$smoke_dir/version-server.db" WATCH_REPOS='' GITHUB_WEBHOOK_SECRET=''
           target/debug/version-server &
           server_pid=$!
           trap 'kill -TERM "$server_pid" 2>/dev/null || true; rm -rf "$smoke_dir"' EXIT
 
           for attempt in {1..20}; do
-            if curl --fail --silent --show-error http://127.0.0.1:3000/healthz >/dev/null; then
+            if curl --fail --silent --show-error http://127.0.0.1:$PORT/healthz >/dev/null; then
               break
             fi
             if [[ "$attempt" == 20 ]]; then
@@ -82,11 +83,11 @@ jobs:
             sleep 0.25
           done
 
-          test "$(curl --fail --silent http://127.0.0.1:3000/healthz)" = "ok"
-          test "$(curl --fail --silent http://127.0.0.1:3000/api/health)" = '{"status":"ok"}'
-          curl --fail --silent http://127.0.0.1:3000/ | grep --ignore-case '<!doctype html'
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/missing)" = "404"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/projects/example)" = "200"
+          test "$(curl --fail --silent http://127.0.0.1:$PORT/healthz)" = "ok"
+          test "$(curl --fail --silent http://127.0.0.1:$PORT/api/health)" = '{"status":"ok"}'
+          curl --fail --silent http://127.0.0.1:$PORT/ | grep --ignore-case '<!doctype html'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:$PORT/api/missing)" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:$PORT/projects/example)" = "200"
 
           kill -TERM "$server_pid"
           wait "$server_pid"
