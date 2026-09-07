@@ -21,22 +21,32 @@
 
 `source` は `webhook` か `poll`。`assets[].digest` は GitHub が返さないときは null。
 
-## 設定 (env)
+## 環境変数
 
-| 変数 | 既定 | 用途 |
-|---|---|---|
-| `PORT` | `3000` | 待受ポート (1–65535)。全 IPv4 interface (`0.0.0.0`) で待ち受ける |
-| `VERSION_SERVER_DB` | `data/version-server.db` | SQLite の path。親 directory は作る |
-| `GITHUB_WEBHOOK_SECRET` | (無し) | webhook の HMAC secret。無ければ webhook は全部 401 |
-| `WATCH_REPOS` | (無し) | polling する `org/repo` の comma 区切り。空なら polling しない |
-| `GITHUB_TOKEN` | (無し) | polling の bearer。無くても public repo は読めるが rate limit が低い |
-| `POLL_SECS` | `60` | polling の間隔 |
-| `GITHUB_API_URL` | `https://api.github.com` | テストや GHES 向けの差し替え口 |
+起動時に読むアプリ設定です。すべて省略して起動できますが、webhook を受け付けるには
+secret、polling には監視 repo の指定が必要です。
 
-`PORT` は未指定時だけ既定値を使い、空・非数値・範囲外なら明示エラーで起動に失敗する。
-`PORT=3010 cargo run` で待受ポートを変更できる。公開範囲は Compose / ingress 側で管理する。
+| 変数 | 必須 / 任意 | 未設定時の既定値 | 用途・不正値の扱い |
+| --- | --- | --- | --- |
+| `PORT` | 任意 | `3000` | 全 IPv4 interface (`0.0.0.0`) の待受ポート。ASCII 数字の `1`–`65535` のみ。空、符号、空白、非数値、範囲外、非 Unicode 値は起動エラー。 |
+| `VERSION_SERVER_DB` | 任意 | `data/version-server.db` | SQLite の path。相対パスは作業 directory 基準で、親 directory は作る。作成・open・初期化に失敗すると起動エラー。空文字は SQLite の一時 DB になるので永続化には使わない。 |
+| `GITHUB_WEBHOOK_SECRET` | webhook 使用時に必要 | 無し | HMAC secret。空も未設定と同じで webhook は全部 401。空でない値はそのまま使い、送信元と一致しなければ署名検証で 401。 |
+| `WATCH_REPOS` | polling 使用時に必要 | 無し（polling 無効） | `org/repo` の comma 区切り。各要素の前後空白と空要素は除く。名前の事前検証はなく、存在しない repo 等は polling 時に失敗を記録する。 |
+| `GITHUB_TOKEN` | 任意 | 無し | polling の bearer。空も未設定扱い。有効性は起動時に検証せず、認証・権限エラーは polling 時に記録する。 |
+| `POLL_SECS` | 任意 | `60` 秒 | polling 間隔。空・負数・数値として読めない値・u64 範囲外は `60`。`0` は背景 polling task が panic して停止するため、正の秒数を指定する。 |
+| `GITHUB_API_URL` | 任意 | `https://api.github.com` | GHES 等の API base URL。末尾の `/` は除く。空や不正な URL は起動時に検証せず、polling 時に失敗を記録する。 |
+| `RUST_LOG` | 任意 | `info` | tracing filter（例: `version_server=debug`）。不正な filter 構文・非 Unicode 値は `info`。空文字は有効な空 filter としてログを無効にする。 |
 
-秘密は env だけで受け取り、log には有無しか出さない。
+`PORT` 以外の文字列設定は、非 Unicode 値を未設定と同様に扱います。
+`GITHUB_TOKEN` / `POLL_SECS` / `GITHUB_API_URL` は `WATCH_REPOS` に有効な要素がある場合だけ読みます。
+polling のリクエスト失敗は HTTP server を停止せず、次の周期で再試行します。
+`GITHUB_TOKEN` 無しでも public repo を監視できますが、rate limit は低くなります。
+
+`PORT=3010 cargo run` で待受ポートを変更できます。旧 `APP_BIND_ADDR` は参照しません。
+ログ設定は現在も `RUST_LOG` であり、`LOG_LEVEL` は読みません。
+公開範囲は Compose / ingress 側で管理します。秘密は env で受け取り、値を log へ出しません。
+読み取り元は [`src/main.rs`](src/main.rs)、polling の処理は [`src/github.rs`](src/github.rs) です。
+Cargo / CI の build 用変数は runtime 設定ではありません。
 
 ## 配備 (home-server の compose に手で足す例)
 
@@ -58,6 +68,11 @@ services:
 volumes:
   version-server-data:
 ```
+
+上の `VERSION_SERVER_WEBHOOK_SECRET` / `VERSION_SERVER_GITHUB_TOKEN` は、この Compose 例が
+共有 `.env` 内でサービスを識別する名前です。アプリは `GITHUB_WEBHOOK_SECRET` / `GITHUB_TOKEN`
+として渡された値だけを読みます。実際のサービスごとの注入方法は
+[home-server の README](https://github.com/miyabisun/home-server/blob/main/README.md) を参照してください。
 
 GitHub 側は各 repo (または org) の webhook に `https://<公開 URL>/webhook/github`、content type `application/json`、secret に同じ値、event は `Releases` だけを選ぶ。cloudflared などで外から届く経路は home-server 側の設定で、本 repository の範囲外。
 
