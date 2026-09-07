@@ -8,7 +8,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::store::{Asset, ReleaseCandidate};
+use crate::{github::PayloadRelease, store::ReleaseCandidate};
 
 /// Whether `header` (the `X-Hub-Signature-256` value, `sha256=<hex>`) is the
 /// HMAC of `body` under `secret`. Constant-time on the digest comparison.
@@ -35,23 +35,6 @@ struct Payload {
 }
 
 #[derive(Deserialize)]
-struct PayloadRelease {
-    tag_name: String,
-    #[serde(default)]
-    published_at: Option<String>,
-    #[serde(default)]
-    assets: Vec<PayloadAsset>,
-}
-
-#[derive(Deserialize)]
-struct PayloadAsset {
-    name: String,
-    browser_download_url: String,
-    #[serde(default)]
-    digest: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct PayloadRepository {
     full_name: String,
 }
@@ -62,22 +45,11 @@ pub fn parse_published(body: &[u8]) -> Result<Option<ReleaseCandidate>, serde_js
     if payload.action != "published" {
         return Ok(None);
     }
-    Ok(Some(ReleaseCandidate {
-        repo: payload.repository.full_name,
-        tag: payload.release.tag_name,
-        published_at: payload.release.published_at,
-        assets: payload
+    Ok(Some(
+        payload
             .release
-            .assets
-            .into_iter()
-            .map(|asset| Asset {
-                name: asset.name,
-                url: asset.browser_download_url,
-                digest: asset.digest,
-            })
-            .collect(),
-        source: "webhook",
-    }))
+            .into_candidate(payload.repository.full_name, "webhook"),
+    ))
 }
 
 #[cfg(test)]

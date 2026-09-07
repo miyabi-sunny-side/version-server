@@ -13,20 +13,40 @@ use tracing::{info, warn};
 use crate::store::{Asset, ReleaseCandidate, Store};
 
 #[derive(Deserialize)]
-struct LatestRelease {
+pub(crate) struct PayloadRelease {
     tag_name: String,
     #[serde(default)]
     published_at: Option<String>,
     #[serde(default)]
-    assets: Vec<LatestAsset>,
+    assets: Vec<PayloadAsset>,
 }
 
 #[derive(Deserialize)]
-struct LatestAsset {
+struct PayloadAsset {
     name: String,
     browser_download_url: String,
     #[serde(default)]
     digest: Option<String>,
+}
+
+impl PayloadRelease {
+    pub(crate) fn into_candidate(self, repo: String, source: &'static str) -> ReleaseCandidate {
+        ReleaseCandidate {
+            repo,
+            tag: self.tag_name,
+            published_at: self.published_at,
+            assets: self
+                .assets
+                .into_iter()
+                .map(|asset| Asset {
+                    name: asset.name,
+                    url: asset.browser_download_url,
+                    digest: asset.digest,
+                })
+                .collect(),
+            source,
+        }
+    }
 }
 
 pub struct Poller {
@@ -98,22 +118,8 @@ impl Poller {
         {
             self.etags.insert(repo.to_owned(), etag.to_owned());
         }
-        let latest: LatestRelease = response.json().await?;
-        let candidate = ReleaseCandidate {
-            repo: repo.to_owned(),
-            tag: latest.tag_name,
-            published_at: latest.published_at,
-            assets: latest
-                .assets
-                .into_iter()
-                .map(|asset| Asset {
-                    name: asset.name,
-                    url: asset.browser_download_url,
-                    digest: asset.digest,
-                })
-                .collect(),
-            source: "poll",
-        };
+        let latest: PayloadRelease = response.json().await?;
+        let candidate = latest.into_candidate(repo.to_owned(), "poll");
         Ok(store.ingest(&candidate)?)
     }
 }

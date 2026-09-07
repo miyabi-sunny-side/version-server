@@ -106,7 +106,10 @@ async fn a_signed_published_release_is_recorded_once() {
     assert_eq!(versions[0]["repo"], "o/r");
     assert_eq!(versions[0]["tag"], "v1.0.0");
     assert_eq!(versions[0]["source"], "webhook");
-    assert_eq!(versions[0]["assets"][0]["digest"], "sha256:abc");
+    assert_eq!(
+        versions[0]["assets"],
+        json!([{ "name": "app.tar.gz", "url": "https://example.test/app.tar.gz", "digest": "sha256:abc" }])
+    );
     let (_, events) = get_json(&state, "/v1/events").await;
     assert_eq!(ids(&events), [1]);
 
@@ -236,7 +239,7 @@ async fn fake_latest(State(fake): State<FakeGithub>, headers: HeaderMap) -> Resp
         axum::Json(json!({
             "tag_name": tag,
             "published_at": "2026-09-03T10:00:00Z",
-            "assets": []
+            "assets": [{ "name": "app.tar.gz", "browser_download_url": "https://example.test/app.tar.gz", "digest": "sha256:abc" }, { "name": "notes", "browser_download_url": "https://example.test/notes" }]
         })),
     )
         .into_response()
@@ -265,7 +268,15 @@ async fn polling_records_a_release_only_when_the_tag_changes() {
     poller.poll_once(&store).await;
     poller.poll_once(&store).await;
     assert_eq!(store.events_since(0, 100).unwrap().len(), 1);
-    assert_eq!(store.latest("o/r").unwrap().unwrap().source, "poll");
+    let latest = store.latest("o/r").unwrap().unwrap();
+    assert_eq!(latest.source, "poll");
+    assert_eq!(
+        serde_json::to_value(&latest.assets).unwrap(),
+        json!([
+            { "name": "app.tar.gz", "url": "https://example.test/app.tar.gz", "digest": "sha256:abc" },
+            { "name": "notes", "url": "https://example.test/notes", "digest": null }
+        ])
+    );
 
     let hits = fake.hits.lock().await.clone();
     assert_eq!(hits.len(), 2);
