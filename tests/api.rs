@@ -301,6 +301,7 @@ struct FakeGithub {
     /// (etag, latest tag) served next; the test rotates it.
     current: Arc<Mutex<(String, String)>>,
     hits: Arc<Mutex<Vec<Option<String>>>>,
+    malformed: Arc<Mutex<bool>>,
 }
 
 async fn fake_latest(State(fake): State<FakeGithub>, headers: HeaderMap) -> Response {
@@ -311,6 +312,9 @@ async fn fake_latest(State(fake): State<FakeGithub>, headers: HeaderMap) -> Resp
     let (etag, tag) = fake.current.lock().await.clone();
     if sent.as_deref() == Some(etag.as_str()) {
         return StatusCode::NOT_MODIFIED.into_response();
+    }
+    if *fake.malformed.lock().await {
+        return ([(header::ETAG, etag)], "{malformed").into_response();
     }
     (
         [(header::ETAG, etag)],
@@ -339,6 +343,7 @@ async fn polling_records_a_release_only_when_the_tag_changes() {
     let fake = FakeGithub {
         current: Arc::new(Mutex::new(("\"etag-1\"".to_owned(), "v1.0.0".to_owned()))),
         hits: Arc::new(Mutex::new(Vec::new())),
+        malformed: Arc::new(Mutex::new(false)),
     };
     let addr = serve_fake(fake.clone()).await;
     let mut poller = Poller::new(&format!("http://{addr}"), None, vec!["o/r".to_owned()]);
@@ -371,4 +376,65 @@ async fn polling_records_a_release_only_when_the_tag_changes() {
     let events = store.events_since(0, 100).unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[1].tag, "v1.1.0");
+}
+
+async fn assert_failed_poll_is_retried(malformed: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("releases.db");
+    let store = Store::open(path.to_str().unwrap()).unwrap();
+    let control = rusqlite::Connection::open(&path).unwrap();
+    let fake = FakeGithub {
+        current: Arc::new(Mutex::new(("\"etag-1\"".to_owned(), "v1".to_owned()))),
+        hits: Arc::new(Mutex::new(Vec::new())),
+        malformed: Arc::new(Mutex::new(false)),
+    };
+    let addr = serve_fake(fake.clone()).await;
+    let mut poller = Poller::new(&format!("http://{addr}"), None, vec!["o/r".to_owned()]);
+    assert_eq!(poller.poll_once(&store).await.len(), 1);
+
+    *fake.current.lock().await = ("\"etag-2\"".to_owned(), "v2".to_owned());
+    *fake.malformed.lock().await = malformed;
+    if !malformed {
+        control.execute_batch("CREATE TRIGGER fail_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+    }
+    assert!(poller.poll_once(&store).await.is_empty());
+    assert_eq!(store.latest("o/r").unwrap().unwrap().tag, "v1");
+    assert_eq!(store.events_since(0, 100).unwrap().len(), 1);
+
+    *fake.malformed.lock().await = false;
+    control
+        .execute_batch("DROP TRIGGER IF EXISTS fail_event")
+        .unwrap();
+    let retried = poller.poll_once(&store).await;
+    assert_eq!(
+        retried.len(),
+        1,
+        "the failed response must be fetched again"
+    );
+    assert_eq!(retried[0].tag, "v2");
+    assert_eq!(store.latest("o/r").unwrap().unwrap().tag, "v2");
+    assert!(
+        poller.poll_once(&store).await.is_empty(),
+        "the successful retry now permits 304"
+    );
+    assert_eq!(store.events_since(0, 100).unwrap().len(), 2);
+    assert_eq!(
+        fake.hits.lock().await.as_slice(),
+        [
+            None,
+            Some("\"etag-1\"".to_owned()),
+            Some("\"etag-1\"".to_owned()),
+            Some("\"etag-2\"".to_owned())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn polling_retries_the_same_etag_after_invalid_json() {
+    assert_failed_poll_is_retried(true).await;
+}
+
+#[tokio::test]
+async fn polling_retries_the_same_etag_after_storage_failure() {
+    assert_failed_poll_is_retried(false).await;
 }

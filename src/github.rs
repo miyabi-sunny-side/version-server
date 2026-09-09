@@ -111,16 +111,19 @@ impl Poller {
             return Ok(None);
         }
         let response = response.error_for_status()?;
-        if let Some(etag) = response
+        let etag = response
             .headers()
             .get(header::ETAG)
             .and_then(|value| value.to_str().ok())
-        {
-            self.etags.insert(repo.to_owned(), etag.to_owned());
-        }
+            .map(str::to_owned);
         let latest: PayloadRelease = response.json().await?;
         let candidate = latest.into_candidate(repo.to_owned(), "poll");
-        Ok(store.ingest(&candidate)?)
+        let event = store.ingest(&candidate)?;
+        // A failed parse or write must leave the response eligible for retry.
+        if let Some(etag) = etag {
+            self.etags.insert(repo.to_owned(), etag);
+        }
+        Ok(event)
     }
 }
 
