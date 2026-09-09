@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use tokio::sync::Mutex;
 use tower::ServiceExt;
-use version_server::{AppState, Store, app, github::Poller};
+use version_server::{AppState, Store, app, github::Poller, store::ReleaseCandidate};
 
 const SECRET: &str = "s3cret";
 
@@ -214,6 +214,84 @@ async fn the_stream_backfills_then_stays_live() {
     let second = String::from_utf8(second.to_vec()).unwrap();
     assert!(second.contains("id: 2"), "live second: {second}");
     assert!(second.contains(r#""tag":"v1.1.0""#), "{second}");
+}
+
+async fn assert_stream_ids(
+    stream: &mut axum::body::BodyDataStream,
+    ids: std::ops::RangeInclusive<i64>,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        for id in ids {
+            let frame = stream.next().await.unwrap().unwrap();
+            let text = std::str::from_utf8(&frame).unwrap();
+            assert!(
+                text.lines().any(|line| line == format!("id: {id}")),
+                "{text}"
+            );
+            assert!(text.lines().any(|line| line == "event: release"), "{text}");
+            let data = text
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .unwrap();
+            let event: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(event["id"], id);
+        }
+    })
+    .await
+    .expect("backfill must drain without a fresh notification");
+}
+
+#[tokio::test]
+async fn the_stream_drains_all_batches_and_resumes_without_duplicates() {
+    for total in [500, 501, 1203] {
+        let state = state();
+        // Seed without broadcasting: no new notification can rescue a stuck batch.
+        for id in 1..=total {
+            state
+                .store
+                .ingest(&ReleaseCandidate {
+                    repo: "o/r".to_owned(),
+                    tag: format!("v{id}"),
+                    published_at: None,
+                    assets: vec![],
+                    source: "poll",
+                })
+                .unwrap();
+        }
+        let response = app(state.clone(), "client")
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/events/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut stream = response.into_body().into_data_stream();
+        assert_stream_ids(&mut stream, 1..=total).await;
+        drop(stream);
+
+        // A client disconnects/reconnects from its last persisted id, even within a batch.
+        let response = app(state.clone(), "client")
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/events/stream?since=497")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut resumed = response.into_body().into_data_stream();
+        assert_stream_ids(&mut resumed, 498..=total).await;
+        let body = release_payload("published", "o/r", "live", "2026-09-03T10:00:00Z");
+        assert_eq!(
+            post_webhook(&state, body.clone(), Some(&sign(&body)))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_stream_ids(&mut resumed, total + 1..=total + 1).await;
+    }
 }
 
 // --- polling against a fake GitHub ---

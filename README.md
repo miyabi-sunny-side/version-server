@@ -16,7 +16,7 @@
 | GET | `/v1/versions` | 全 repo の最新 `[{repo, tag, published_at, assets[{name,url,digest}], source, received_at}]` |
 | GET | `/v1/versions/{org}/{repo}` | その repo の最新。無ければ 404 |
 | GET | `/v1/events?since=<id>&limit=<n>` | `id > since` の event を id 昇順で最大 `limit` (既定 100、上限 500) |
-| GET | `/v1/events/stream?since=<id>` | SSE。接続時に `since` 以降を流してから、新しい event が出るたびに送る。`id:` に event id、`event: release`、`data:` に event の JSON。再接続は最後の id を `since` に渡す |
+| GET | `/v1/events/stream?since=<id>` | SSE。接続時に `since` 以降を流してから、新しい event が出るたびに送る。`id:` に event id、`event: release`、`data:` に event の JSON。再接続は最後の id を `since` に渡す（`Last-Event-ID` ヘッダーは参照しない） |
 | GET | `/healthz`, `/api/health` | 生存確認 |
 
 `source` は `webhook` か `poll`。`assets[].digest` は GitHub が返さないときは null。

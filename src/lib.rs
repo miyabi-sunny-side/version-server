@@ -205,6 +205,7 @@ async fn events_stream(
         loop {
             match store.events_since(cursor, MAX_EVENTS) {
                 Ok(batch) => {
+                    let full_batch = batch.len() == MAX_EVENTS;
                     for event in batch {
                         cursor = event.id;
                         let data = serde_json::to_string(&event).unwrap_or_default();
@@ -216,6 +217,9 @@ async fn events_stream(
                         if tx.send(sse).await.is_err() {
                             return;
                         }
+                    }
+                    if full_batch {
+                        continue;
                     }
                 }
                 Err(error) => warn!(%error, "stream read failed"),
