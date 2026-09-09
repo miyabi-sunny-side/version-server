@@ -329,34 +329,18 @@ on a 24×24 grid — `fill="none" stroke="currentColor" stroke-width="2"
 stroke-linecap="round" stroke-linejoin="round"` (Lucide style), default
 size `1.2em`, baseline-aligned, inheriting the text color of its context.
 
-Current dictionary: `menu`, `x`, `sun`, `moon`, `monitor`,
-`chevron-left`, `trash`, `megaphone`, `megaphone-off`, `pencil`,
-`refresh-cw`, `check-check`, `mail`, `book`, `search`, `star`,
-`star-filled`.
-
-Outline is the unnamed default: a `-filled` variant shares its outline
-sibling's geometry and overrides `fill` to `currentColor` on the shape
-itself — the root svg stays `fill="none"` for every entry. A filled
-variant is a visual state only; the control using it must still carry
-that state accessibly (e.g. `aria-pressed`), never through color alone.
-
-`Icon.svelte` also exports `ICON_NAMES`, the canonical array of every
-dictionary entry. Anything that enumerates the dictionary — the
-アイコン辞書 fixture's specimen page — renders from that export, never
-from a hand-copied list. The dictionary is a vocabulary, not a usage
-report: an entry (e.g. `chevron-left`) stays even while no screen
-currently uses it.
+version-server owns only the icons used by its screens: `menu`, `x`,
+`sun`, `moon`, and `monitor`. The shared template is a bootstrap source,
+not a dictionary this product must mirror. Unused entries and the
+unrouted template specimen catalog are not maintained here.
 
 - **Emoji are banned as UI icons**, and so are text glyphs standing in
   for icons (▲ ▼ × ☰ ▶ …) — always an SVG entry in the dictionary.
-- **Adoption rule:** this template's dictionary is the family's
-  canonical copy source. A derived project adds new icons to its own
-  `Icon.svelte`; icons that prove generally useful are normalized to the
-  24×24 Lucide grammar above and adopted into this dictionary first.
-  After adoption, each project receives an explicit, separate delivery
-  that replaces its local or inline SVGs with the template's
-  name-and-geometry entry — no automatic sync, no submodule, no runtime
-  dependency; every project's DESIGN.md and build stay self-contained.
+- **Adoption rule:** add an entry to this product's `Icon.svelte` when a
+  screen needs it, retaining the 24×24 Lucide grammar above. Shared
+  template changes are adopted explicitly; there is no automatic sync,
+  submodule, or runtime dependency. This DESIGN.md owns the product's
+  icon contract; the shared template owns its broader vocabulary.
 
 ## Components
 
@@ -400,15 +384,6 @@ currently uses it.
   content column showing summary (body), status (an outline badge —
   caption type, 1px border, muted text; neutral chrome, not a data
   color), updated-at (caption muted), and body text (body, 1.6).
-- **Icon dictionary fixture (`id: icons`):** this fixture's detail page
-  appends a live specimen of the whole dictionary below the standard
-  fields: a non-interactive list (`ul`/`li` — no `button`, no `a`,
-  nothing focusable) with one tile per entry of `ICON_NAMES`. Each tile
-  is the icon centered in a 36px square styled by the icon-button
-  recipe (surface-raised, 1px hairline, sm radius) with the entry name
-  beneath as muted caption, tiles flowing in a responsive grid with
-  `--sp-2` gaps. Specimens look like the control they document but are
-  not pressable — a button that does nothing is worse than a picture.
 - **Buttons:** default = surface-raised bg, 1px hairline, label type,
   sm radius, 8×14px padding, hover fills `--c-hover-1`. Primary =
   accent bg, `surface-raised`-token text — at most one per screen.
@@ -473,10 +448,6 @@ currently uses it.
      it. Item 1 reads テーマ設定 and opens the centered theme modal.
   8. A detail page's sub-header contains the item title and zero
      buttons or links.
-  9. The アイコン辞書 detail page renders exactly `ICON_NAMES.length`
-     specimen tiles, none focusable; each icon box computes to
-     36×36px / 1px border / 6px radius with the entry name as a muted
-     caption.
 
 ## Do's and Don'ts
 
