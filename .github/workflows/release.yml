@@ -85,6 +85,11 @@ jobs:
           test "$digest" = "$BUILD_DIGEST"
           echo "image=$ref@$digest" >> "$GITHUB_OUTPUT"
 
+      - name: Smoke-test published container with polling enabled
+        env:
+          RELEASE_IMAGE: ${{ steps.digest.outputs.image }}
+        run: bash scripts/smoke-container.sh "$RELEASE_IMAGE"
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

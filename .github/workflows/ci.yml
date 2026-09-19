@@ -109,4 +109,9 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: version-server:smoke
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:build-cache
+
+      - name: Smoke-test container with polling enabled
+        run: bash scripts/smoke-container.sh version-server:smoke

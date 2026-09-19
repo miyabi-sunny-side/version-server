@@ -27,7 +27,9 @@ RUN cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-RUN mkdir data && chown 10001:10001 data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir data && chown 10001:10001 data
 COPY --from=backend /app/target/release/version-server /usr/local/bin/version-server
 COPY --from=frontend /app/client/dist ./client/dist
 ENV PORT=3000
