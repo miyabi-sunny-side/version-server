@@ -6,9 +6,10 @@
 
 | Method | Path | 応答 |
 |---|---|---|
-| POST | `/webhook/github` | 署名不正・secret未設定は401。署名検証に成功した後でJSONを解析する。`release` 以外の event や `published` 以外の action は 204。記録したら 200 に event、既知の release なら 200 に `{"recorded": false}` |
+| POST | `/webhook/github` | 署名不正・secret未設定は401。検証後にJSONを解析。公開releaseは200にevent（既知なら `{"recorded": false}`）、branchへのpushは200に `{repo, branch, sha}`。tag push・branch削除・その他のevent/actionは204。不正payloadは400 |
 | GET | `/v1/versions` | 全 repo の最新 `[{repo, tag, published_at, assets[{name,url,digest}], source, received_at}]` |
 | GET | `/v1/versions/{org}/{repo}` | その repo の最新。無ければ 404 |
+| GET | `/v1/branches/{org}/{repo}/{branch}` | 最後に受信したbranch pushの `{repo, branch, sha}`。未受信なら404。branch名は `/` を含められる |
 | GET | `/v1/events?since=<id>&limit=<n>` | `id > since` の event を id 昇順で最大 `limit` (既定 100、上限 500) |
 | GET | `/v1/events/stream?since=<id>` | SSE。接続時に `since` 以降を流してから、新しい event が出るたびに送る。`id:` に event id、`event: release`、`data:` に event の JSON。再接続時に最後のidを`since`へ渡す。`Last-Event-ID`ヘッダーは参照しない |
 | GET | `/healthz`, `/api/health` | 生存確認 |
@@ -50,3 +51,18 @@ Webhookとpollingは同じ保存処理を使います。同じtagの再受信で
 
 最新状態は`releases`、変更履歴は追記型の`events`へ保存します。
 内部の処理は[Store::ingest](../src/store.rs)を参照してください。
+
+## branch更新を受信する
+
+Releaseを作らずbranchから配備する利用先は、同じWebhookへGitHubの`Pushes`イベントを追加する。
+署名secretはReleaseと共通。`refs/heads/` へのpushだけを `branches` に永続保存し、
+Releaseの一覧・イベント・SSEには混ぜない。`WATCH_REPOS` への登録は不要。
+SHAは40桁の16進数として検証し、削除を表すゼロSHAは更新として保存しない。
+
+```sh
+curl --fail http://127.0.0.1:3010/v1/branches/owner/repo/master
+```
+
+返すのは受信順の最後のSHAであり、GitHubの現在HEADを保証しない。利用先は更新の合図として使い、
+実際の配備では対象branchをfast-forwardで取得する。branchは定期pollingの対象外なので、
+Webhookが届かなかった場合はGitHubのRecent Deliveriesから再送する。

@@ -28,7 +28,21 @@ CREATE TABLE IF NOT EXISTS events (
   tag  TEXT NOT NULL,
   at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS branches (
+  repo TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  PRIMARY KEY (repo, branch)
+);
 ";
+
+/// Last signed push received for a branch, separate from release history.
+#[derive(Debug, Serialize)]
+pub struct Branch {
+    pub repo: String,
+    pub branch: String,
+    pub sha: String,
+}
 
 /// One published asset of a release, as much of it as GitHub tells us.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +120,33 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn record_branch(&self, branch: &Branch) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        conn.execute(
+            "INSERT INTO branches (repo, branch, sha) VALUES (?1, ?2, ?3)
+             ON CONFLICT(repo, branch) DO UPDATE SET sha = excluded.sha",
+            params![branch.repo, branch.branch, branch.sha],
+        )?;
+        Ok(())
+    }
+
+    pub fn branch(&self, repo: &str, branch: &str) -> Result<Option<Branch>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        Ok(conn
+            .query_row(
+                "SELECT repo, branch, sha FROM branches WHERE repo = ?1 AND branch = ?2",
+                params![repo, branch],
+                |row| {
+                    Ok(Branch {
+                        repo: row.get(0)?,
+                        branch: row.get(1)?,
+                        sha: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     pub fn open(path: &str) -> Result<Self, StoreError> {
         Self::from_connection(Connection::open(path)?)
     }

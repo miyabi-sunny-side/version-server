@@ -72,6 +72,7 @@ pub fn app(state: AppState, static_dir: impl AsRef<Path>) -> Router {
     let v1 = Router::new()
         .route("/versions", get(versions))
         .route("/versions/{org}/{repo}", get(version_of))
+        .route("/branches/{org}/{repo}/{*branch}", get(branch_of))
         .route("/events", get(events))
         .route("/events/stream", get(events_stream))
         .fallback(api_not_found);
@@ -106,7 +107,7 @@ fn internal(error: impl std::fmt::Display) -> Response {
 }
 
 /// `POST /webhook/github`: 401 before reading an unverified body, 204 for a
-/// delivery that announces no published release, 200 once it is recorded.
+/// delivery that announces no published release or branch push, 200 once recorded.
 async fn github_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -121,11 +122,23 @@ async fn github_webhook(
     if !webhook::verify_signature(secret, &body, signature) {
         return (StatusCode::UNAUTHORIZED, "bad signature\n").into_response();
     }
-    // A ping (or any other event) carries no release: acknowledged, not recorded.
+    // Pushes have their own snapshot and never enter release events or SSE.
     let event = headers
         .get("x-github-event")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("release");
+    if event == "push" {
+        return match webhook::parse_push(&body) {
+            Ok(Some(branch)) => match state.store.record_branch(&branch) {
+                Ok(()) => (StatusCode::OK, Json(branch)).into_response(),
+                Err(error) => internal(error),
+            },
+            Ok(None) => StatusCode::NO_CONTENT.into_response(),
+            Err(error) => {
+                (StatusCode::BAD_REQUEST, format!("bad payload: {error}\n")).into_response()
+            }
+        };
+    }
     if event != "release" {
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -154,6 +167,17 @@ async fn github_webhook(
 async fn versions(State(state): State<AppState>) -> Response {
     match state.store.latest_all() {
         Ok(releases) => Json(releases).into_response(),
+        Err(error) => internal(error),
+    }
+}
+
+async fn branch_of(
+    State(state): State<AppState>,
+    UrlPath((org, repo, branch)): UrlPath<(String, String, String)>,
+) -> Response {
+    match state.store.branch(&format!("{org}/{repo}"), &branch) {
+        Ok(Some(branch)) => Json(branch).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no push recorded\n").into_response(),
         Err(error) => internal(error),
     }
 }

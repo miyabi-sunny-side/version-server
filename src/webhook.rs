@@ -1,14 +1,17 @@
-//! GitHub's `release` webhook: prove who sent it, then read only what we need.
+//! GitHub release and push webhooks: prove who sent them, then read what we need.
 //!
 //! The signature is checked over the raw body before anything is parsed, so a
-//! body that fails the check is never deserialised. Only `published` counts;
-//! every other action is acknowledged and dropped.
+//! body that fails the check is never deserialised. Releases count on `published`;
+//! branch pushes are separate deployment signals, excluding deletions.
 
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::{github::PayloadRelease, store::ReleaseCandidate};
+use crate::{
+    github::PayloadRelease,
+    store::{Branch, ReleaseCandidate},
+};
 
 /// Whether `header` (the `X-Hub-Signature-256` value, `sha256=<hex>`) is the
 /// HMAC of `body` under `secret`. Constant-time on the digest comparison.
@@ -37,6 +40,38 @@ struct Payload {
 #[derive(Deserialize)]
 struct PayloadRepository {
     full_name: String,
+}
+
+#[derive(Deserialize)]
+struct PushPayload {
+    #[serde(rename = "ref")]
+    reference: String,
+    after: String,
+    deleted: bool,
+    repository: PayloadRepository,
+}
+
+/// Branch pushes only; tag pushes and deletions cannot trigger deployment.
+pub fn parse_push(body: &[u8]) -> Result<Option<Branch>, serde_json::Error> {
+    let payload: PushPayload = serde_json::from_slice(body)?;
+    let Some(branch) = payload.reference.strip_prefix("refs/heads/") else {
+        return Ok(None);
+    };
+    if payload.deleted {
+        return Ok(None);
+    }
+    if branch.is_empty()
+        || payload.after.len() != 40
+        || !payload.after.bytes().all(|b| b.is_ascii_hexdigit())
+        || payload.after.bytes().all(|b| b == b'0')
+    {
+        return Err(serde::de::Error::custom("invalid branch or commit SHA"));
+    }
+    Ok(Some(Branch {
+        repo: payload.repository.full_name,
+        branch: branch.to_owned(),
+        sha: payload.after,
+    }))
 }
 
 /// The release a `published` payload announces. `Ok(None)` for any other action.
