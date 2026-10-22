@@ -41,7 +41,7 @@ polling のリクエスト失敗は HTTP server を停止せず、次の周期�
 ログ設定は現在も `RUST_LOG` であり、`LOG_LEVEL` は読みません。
 公開範囲は Compose / ingress 側で管理します。秘密は env で受け取り、値を log へ出しません。
 読み取り元は [`src/main.rs`](../src/main.rs)、polling の処理は [`src/github.rs`](../src/github.rs) です。
-Cargo / CI の build 用変数は runtime 設定ではありません。
+Cargo / release workflow の build 用変数は runtime 設定ではありません。
 
 ## 保存する更新
 

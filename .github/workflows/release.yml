@@ -10,12 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
-    uses: ./.github/workflows/ci.yml
-
   publish:
-    needs: verify
     if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
@@ -84,11 +79,6 @@ jobs:
           test -n "$BUILD_DIGEST"
           test "$digest" = "$BUILD_DIGEST"
           echo "image=$ref@$digest" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke-test published container with polling enabled
-        env:
-          RELEASE_IMAGE: ${{ steps.digest.outputs.image }}
-        run: bash scripts/smoke-container.sh "$RELEASE_IMAGE"
 
       - name: Create the GitHub Release
         env:

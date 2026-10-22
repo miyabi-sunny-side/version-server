@@ -9,12 +9,20 @@ Git、Rust 1.96以上、Node.js 24とnpmが必要です。checkoutのルート�
 ```sh
 git clone https://github.com/miyabi-sunny-side/version-server.git
 cd version-server
-cargo test --locked
+cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-npm --prefix client ci && npm --prefix client test && npm --prefix client run check
+cargo test --locked
+npm --prefix client ci && npm --prefix client run format:check
+npm --prefix client test && npm --prefix client run check
 npm --prefix client run build && npm --prefix client run lint:design
+cargo build --locked && bash scripts/smoke-server.sh
+docker build -t version-server:smoke . && bash scripts/smoke-container.sh version-server:smoke
 cargo run   # http://127.0.0.1:3000 (client/dist を配信)
 ```
+
+検査はすべてcommit前に手元で通します。GitHub Actionsはtagからのreleaseだけを行い、検査やテストは実行しません。
+`smoke-server.sh`はbuild済みのdebug serverを検証用DBで起動し、health・SPA・404を確認します。
+`smoke-container.sh`はimageを監視有効で起動し、healthを確認します。
 
 ## Webhookの手動確認
 
@@ -30,11 +38,10 @@ curl -sS -X POST localhost:3000/webhook/github -H "X-Hub-Signature-256: $sig" -H
 
 ## リリース
 
-main・PR・手動CIはfrontendとRustを検査し、debug serverの起動を確認します。
-PR・手動CIはcontainer buildも検査し、imageは公開しません。
+releaseの前に上の検証を手元で通します。
 
 `Cargo.toml`と`Cargo.lock`のpackage versionを更新し、commitします。
-同じcommitに`v<major>.<minor>.<patch>` tagを付けてpushすると、Release containerが動きます。手動 release も同じ tag ref を選ぶ。tag commit の検査に成功し、tag と両 manifest の version が一致した場合だけ、そのソースから image を build / publish する。公開先は `ghcr.io/miyabi-sunny-side/version-server:<version>` と `:latest`。公開imageは監視を有効にした起動確認も通す。GitHub Releaseには、build出力と一致を検証した`<version>@sha256:...`を記載する。
+同じcommitに`v<major>.<minor>.<patch>` tagを付けてpushすると、Release containerが動きます。手動 release も同じ tag ref を選ぶ。tag と両 manifest の version が一致した場合だけ、そのソースから image を build / publish する。公開先は `ghcr.io/miyabi-sunny-side/version-server:<version>` と `:latest`。GitHub Releaseには、build出力と一致を検証した`<version>@sha256:...`を記載する。
 
 Docker は Rust 1.96.0 と cargo-chef 0.1.78 を固定し、frontend・Rust 依存・本体を別の層として構築する。tag 間の中間層は製品 image と別の `:build-cache` に registry cache (`mode=max`) として保存する。本体は実際の manifest で build するため、version だけの更新でも本体を再コンパイルする。
 
