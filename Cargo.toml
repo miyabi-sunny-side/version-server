@@ -27,8 +27,10 @@ tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 
 [lints.clippy]
-all = "warn"
-pedantic = "warn"
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "warn"
+missing_assert_message = "warn"
 
 [profile.release]
 opt-level = 3

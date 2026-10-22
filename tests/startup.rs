@@ -63,24 +63,24 @@ fn serves_selected_port_and_ignores_legacy_address() {
 }
 
 fn assert_rejected(value: &std::ffi::OsStr) {
-    let mut server = Server(command().env("PORT", value).spawn().unwrap());
+    let mut server = Server(command().env("PORT", value).spawn().expect("spawn server"));
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
-        if let Some(status) = server.0.try_wait().unwrap() {
+        if let Some(status) = server.0.try_wait().expect("poll server status") {
             break status;
         }
         assert!(Instant::now() < deadline, "invalid PORT must fail startup");
         thread::sleep(Duration::from_millis(20));
     };
-    assert!(!status.success());
+    assert!(!status.success(), "invalid PORT must exit non-zero");
     let mut error = String::new();
     server
         .0
         .stderr
         .take()
-        .unwrap()
+        .expect("stderr is piped")
         .read_to_string(&mut error)
-        .unwrap();
+        .expect("read server stderr");
     assert!(error.contains("PORT"), "{error}");
 }
 

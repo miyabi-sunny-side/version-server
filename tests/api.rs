@@ -25,13 +25,14 @@ const SECRET: &str = "s3cret";
 
 fn state() -> AppState {
     AppState::new(
-        Arc::new(Store::open_in_memory().unwrap()),
+        Arc::new(Store::open_in_memory().expect("open in-memory store")),
         Some(SECRET.to_owned()),
     )
 }
 
 fn sign(body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).expect("HMAC accepts any key length");
     mac.update(body);
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
@@ -62,21 +63,32 @@ async fn post_webhook(state: &AppState, body: Vec<u8>, signature: Option<&str>) 
         request = request.header("x-hub-signature-256", signature);
     }
     app(state.clone(), "client")
-        .oneshot(request.body(Body::from(body)).unwrap())
+        .oneshot(
+            request
+                .body(Body::from(body))
+                .expect("build webhook request"),
+        )
         .await
-        .unwrap()
+        .expect("router is infallible")
 }
 
 async fn get_json(state: &AppState, uri: &str) -> (StatusCode, Value) {
     let response = app(state.clone(), "client")
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("build GET request"),
+        )
         .await
-        .unwrap();
+        .expect("router is infallible");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
     // Refusals answer plain text; only success bodies are JSON.
     let value = if status.is_success() && !bytes.is_empty() {
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes).expect("success body is JSON")
     } else {
         Value::Null
     };
@@ -86,9 +98,9 @@ async fn get_json(state: &AppState, uri: &str) -> (StatusCode, Value) {
 fn ids(events: &Value) -> Vec<i64> {
     events
         .as_array()
-        .unwrap()
+        .expect("events are a JSON array")
         .iter()
-        .map(|event| event["id"].as_i64().unwrap())
+        .map(|event| event["id"].as_i64().expect("event id is an integer"))
         .collect()
 }
 
@@ -222,8 +234,12 @@ async fn assert_stream_ids(
 ) {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         for id in ids {
-            let frame = stream.next().await.unwrap().unwrap();
-            let text = std::str::from_utf8(&frame).unwrap();
+            let frame = stream
+                .next()
+                .await
+                .expect("stream stays open")
+                .expect("read stream frame");
+            let text = std::str::from_utf8(&frame).expect("SSE frame is UTF-8");
             assert!(
                 text.lines().any(|line| line == format!("id: {id}")),
                 "{text}"
@@ -232,9 +248,9 @@ async fn assert_stream_ids(
             let data = text
                 .lines()
                 .find_map(|line| line.strip_prefix("data: "))
-                .unwrap();
-            let event: Value = serde_json::from_str(data).unwrap();
-            assert_eq!(event["id"], id);
+                .expect("frame has a data line");
+            let event: Value = serde_json::from_str(data).expect("data line is JSON");
+            assert_eq!(event["id"], id, "{text}");
         }
     })
     .await
@@ -307,7 +323,7 @@ struct FakeGithub {
 async fn fake_latest(State(fake): State<FakeGithub>, headers: HeaderMap) -> Response {
     let sent = headers
         .get(header::IF_NONE_MATCH)
-        .map(|value| value.to_str().unwrap().to_owned());
+        .map(|value| value.to_str().expect("If-None-Match is ASCII").to_owned());
     fake.hits.lock().await.push(sent.clone());
     let (etag, tag) = fake.current.lock().await.clone();
     if sent.as_deref() == Some(etag.as_str()) {
@@ -331,9 +347,17 @@ async fn serve_fake(fake: FakeGithub) -> SocketAddr {
     let router = Router::new()
         .route("/repos/{owner}/{repo}/releases/latest", get(fake_latest))
         .with_state(fake);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake GitHub");
+    let addr = listener
+        .local_addr()
+        .expect("bound listener has an address");
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("serve fake GitHub");
+    });
     addr
 }
 
@@ -379,10 +403,10 @@ async fn polling_records_a_release_only_when_the_tag_changes() {
 }
 
 async fn assert_failed_poll_is_retried(malformed: bool) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().join("releases.db");
-    let store = Store::open(path.to_str().unwrap()).unwrap();
-    let control = rusqlite::Connection::open(&path).unwrap();
+    let store = Store::open(path.to_str().expect("temp path is UTF-8")).expect("open store");
+    let control = rusqlite::Connection::open(&path).expect("open control connection");
     let fake = FakeGithub {
         current: Arc::new(Mutex::new(("\"etag-1\"".to_owned(), "v1".to_owned()))),
         hits: Arc::new(Mutex::new(Vec::new())),
@@ -390,34 +414,41 @@ async fn assert_failed_poll_is_retried(malformed: bool) {
     };
     let addr = serve_fake(fake.clone()).await;
     let mut poller = Poller::new(&format!("http://{addr}"), None, vec!["o/r".to_owned()]);
-    assert_eq!(poller.poll_once(&store).await.len(), 1);
+    assert_eq!(
+        poller.poll_once(&store).await.len(),
+        1,
+        "the first poll records v1"
+    );
 
     *fake.current.lock().await = ("\"etag-2\"".to_owned(), "v2".to_owned());
     *fake.malformed.lock().await = malformed;
     if !malformed {
-        control.execute_batch("CREATE TRIGGER fail_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        control.execute_batch("CREATE TRIGGER fail_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'test failure'); END;").expect("install failing trigger");
     }
-    assert!(poller.poll_once(&store).await.is_empty());
-    assert_eq!(store.latest("o/r").unwrap().unwrap().tag, "v1");
-    assert_eq!(store.events_since(0, 100).unwrap().len(), 1);
+    assert!(
+        poller.poll_once(&store).await.is_empty(),
+        "a failed poll records nothing"
+    );
+    assert_eq!(latest_tag(&store), "v1", "the failed poll keeps v1 latest");
+    assert_eq!(event_count(&store), 1, "the failed poll adds no event");
 
     *fake.malformed.lock().await = false;
     control
         .execute_batch("DROP TRIGGER IF EXISTS fail_event")
-        .unwrap();
+        .expect("drop failing trigger");
     let retried = poller.poll_once(&store).await;
     assert_eq!(
         retried.len(),
         1,
         "the failed response must be fetched again"
     );
-    assert_eq!(retried[0].tag, "v2");
-    assert_eq!(store.latest("o/r").unwrap().unwrap().tag, "v2");
+    assert_eq!(retried[0].tag, "v2", "the retry records v2");
+    assert_eq!(latest_tag(&store), "v2", "v2 is latest after the retry");
     assert!(
         poller.poll_once(&store).await.is_empty(),
         "the successful retry now permits 304"
     );
-    assert_eq!(store.events_since(0, 100).unwrap().len(), 2);
+    assert_eq!(event_count(&store), 2, "the retry adds one event");
     assert_eq!(
         fake.hits.lock().await.as_slice(),
         [
@@ -425,8 +456,21 @@ async fn assert_failed_poll_is_retried(malformed: bool) {
             Some("\"etag-1\"".to_owned()),
             Some("\"etag-1\"".to_owned()),
             Some("\"etag-2\"".to_owned())
-        ]
+        ],
+        "the failed ETag is resent until a poll succeeds"
     );
+}
+
+fn latest_tag(store: &Store) -> String {
+    store
+        .latest("o/r")
+        .expect("read latest")
+        .expect("a release is recorded")
+        .tag
+}
+
+fn event_count(store: &Store) -> usize {
+    store.events_since(0, 100).expect("read events").len()
 }
 
 #[tokio::test]

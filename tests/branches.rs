@@ -20,7 +20,7 @@ async fn push(
     let body = json!({"ref": branch, "after": sha, "deleted": deleted,
         "repository": {"full_name": "o/r"}})
     .to_string();
-    let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").expect("HMAC accepts any key length");
     mac.update(body.as_bytes());
     let signature = if valid_signature {
         format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
@@ -35,20 +35,27 @@ async fn push(
                 .header("x-github-event", "push")
                 .header("x-hub-signature-256", signature)
                 .body(Body::from(body))
-                .unwrap(),
+                .expect("build push webhook request"),
         )
         .await
-        .unwrap()
+        .expect("router is infallible")
         .status()
 }
 
 async fn read(state: &AppState, uri: &str) -> (StatusCode, Value) {
     let response = app(state.clone(), "client")
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("build GET request"),
+        )
         .await
-        .unwrap();
+        .expect("router is infallible");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
     (
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
